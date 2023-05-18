@@ -14,6 +14,7 @@ import (
 	"github.com/markbates/goth/providers/linkedin"
 	"github.com/spf13/viper"
 	"golang.org/x/net/context"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/sheets/v4"
 )
@@ -46,7 +47,6 @@ func main() {
 	}
 	client_id := viper.GetString("client_id")
 	client_secret := viper.GetString("client_secret")
-	redirect_uri := viper.GetString("redirect_uri")
 	hashtag := viper.GetString("hashtag")
 	experience_years := viper.GetInt("experience_years")
 	job_title := viper.GetString("job_title")
@@ -54,55 +54,43 @@ func main() {
 	sheet_name := viper.GetString("sheet_name")
 
 	// Set up the LinkedIn provider
-	linkedinProvider := linkedin.New(client_id, client_secret, redirect_uri)
+	linkedinProvider := linkedin.New(client_id, client_secret, "http://localhost:3000/auth/linkedin/callback", linkedin.ScopeEmail, linkedin.ScopeBasicProfile, linkedin.ScopeReadWriteWShare)
 	goth.UseProviders(linkedinProvider)
 
-	// Create a ticker that ticks every 30 minutes
-	ticker := time.NewTicker(30 * time.Minute)
-
-	for range ticker.C {
-		accessToken, err := authenticateUser(linkedinProvider)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-
-		profiles, err := searchProfiles(accessToken, hashtag)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-
-		filteredProfiles := filterProfiles(profiles, job_title, experience_years)
-
-		err = addProfilesToGoogleSheets(filteredProfiles, spreadsheet_id, sheet_name)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-
-		fmt.Println("Profiles added to Google Sheets.")
+	// Configure the OAuth2 client
+	conf := &oauth2.Config{
+		ClientID:     client_id,
+		ClientSecret: client_secret,
+		Endpoint:     linkedinProvider.Endpoint(),
+		Scopes:       []string{linkedin.ScopeEmail, linkedin.ScopeBasicProfile, linkedin.ScopeReadWriteWShare},
+		RedirectURL:  "http://localhost:3000/auth/linkedin/callback",
 	}
-}
 
-func authenticateUser(linkedinProvider *linkedin.Provider) (string, error) {
-	session, err := linkedinProvider.BeginAuth("state")
+	// Obtain an access token using the OAuth2 client
+	token, err := conf.PasswordCredentialsToken(context.Background(), "", url.Values{
+		"grant_type": {"client_credentials"},
+	})
 	if err != nil {
-		return "", err
+		fmt.Println(err)
+		return
 	}
-	authUrl, err := session.GetAuthURL()
+	accessToken := token.AccessToken
+
+	profiles, err := searchProfiles(accessToken, hashtag)
 	if err != nil {
-		return "", err
+		fmt.Println(err)
+		return
 	}
-	fmt.Println("Please visit this URL to authenticate: ", authUrl)
-	fmt.Print("Enter the authentication code: ")
-	var authCode string
-	fmt.Scanln(&authCode)
-	_, err = session.Authorize(goth.Params{"code": authCode})
+
+	filteredProfiles := filterProfiles(profiles, job_title, experience_years)
+
+	err = addProfilesToGoogleSheets(filteredProfiles, accessToken, spreadsheet_id, sheet_name)
 	if err != nil {
-		return "", err
+		fmt.Println(err)
+		return
 	}
-	return session.AccessToken, nil
+
+	fmt.Println("Profiles added to Google Sheets.")
 }
 
 func searchProfiles(accessToken string, hashtag string) ([]Profile, error) {
@@ -150,7 +138,7 @@ func filterProfiles(profiles []Profile, jobTitle string, experienceYears int) []
 	return filteredProfiles
 }
 
-func addProfilesToGoogleSheets(profiles []Profile, spreadsheetId string, sheetName string) error {
+func addProfilesToGoogleSheets(profiles []Profile, accessToken string, spreadsheetId string, sheetName string) error {
 	ctx := context.Background()
 	creds, err := google.FindDefaultCredentials(ctx, sheets.SpreadsheetsScope)
 	if err != nil {
