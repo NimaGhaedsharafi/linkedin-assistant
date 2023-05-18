@@ -8,18 +8,18 @@ A Google Cloud Platform project with the Google Sheets API enabled
 A Google service account with access to the Google Sheets API
 Getting Started
 Clone this repository:
-Copy
+```
 git clone https://github.com/yourusername/linkedin-profile-search.git
 ```
 
 Install the dependencies:
-Copy
+```
 go mod download
 ```
 
 Create a configuration file named config.yaml in the root directory of the project. Here's an example configuration file:
 yaml
-Copy
+```
 client_id: <your LinkedIn app client ID>
 client_secret: <your LinkedIn app client secret>
 redirect_uri: <your LinkedIn app redirect URI>
@@ -37,7 +37,7 @@ experience_years: This is the minimum number of years of experience that a profi
 job_title: This is the job title to filter the results by.
 spreadsheet_id and sheet_name: These are the ID and name, respectively, of the Google Sheets spreadsheet to add the filtered profiles to.
 Run the tool:
-Copy
+```
 go run main.go
 ```
 
