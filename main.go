@@ -45,8 +45,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	client_id := viper.GetString("client_id")
-	client_secret := viper.GetString("client_secret")
+	api_key := viper.GetString("api_key")
 	hashtag := viper.GetString("hashtag")
 	experience_years := viper.GetInt("experience_years")
 	job_title := viper.GetString("job_title")
@@ -54,27 +53,14 @@ func main() {
 	sheet_name := viper.GetString("sheet_name")
 
 	// Set up the LinkedIn provider
-	linkedinProvider := linkedin.New(client_id, client_secret, "http://localhost:3000/auth/linkedin/callback", linkedin.ScopeEmail, linkedin.ScopeBasicProfile, linkedin.ScopeReadWriteWShare)
+	linkedinProvider := linkedin.New(api_key, "", "")
 	goth.UseProviders(linkedinProvider)
 
-	// Configure the OAuth2 client
-	conf := &oauth2.Config{
-		ClientID:     client_id,
-		ClientSecret: client_secret,
-		Endpoint:     linkedinProvider.Endpoint(),
-		Scopes:       []string{linkedin.ScopeEmail, linkedin.ScopeBasicProfile, linkedin.ScopeReadWriteWShare},
-		RedirectURL:  "http://localhost:3000/auth/linkedin/callback",
-	}
-
-	// Obtain an access token using the OAuth2 client
-	token, err := conf.PasswordCredentialsToken(context.Background(), "", url.Values{
-		"grant_type": {"client_credentials"},
-	})
+	accessToken, err := getAccessToken(api_key)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	accessToken := token.AccessToken
 
 	profiles, err := searchProfiles(accessToken, hashtag)
 	if err != nil {
@@ -91,6 +77,33 @@ func main() {
 	}
 
 	fmt.Println("Profiles added to Google Sheets.")
+}
+
+func getAccessToken(apiKey string) (string, error) {
+	tokenUrl := "https://www.linkedin.com/oauth/v2/accessToken"
+	data := url.Values{}
+	data.Set("grant_type", "client_credentials")
+	req, err := http.NewRequest("POST", tokenUrl, bytes.NewBufferString(data.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(apiKey, "")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	var token struct {
+		AccessToken string `json:"access_token"`
+	}
+	err = json.Unmarshal(body, &token)
+	if err != nil {
+		return "", err
+	}
+	return token.AccessToken, nil
 }
 
 func searchProfiles(accessToken string, hashtag string) ([]Profile, error) {
@@ -156,9 +169,36 @@ func addProfilesToGoogleSheets(profiles []Profile, accessToken string, spreadshe
 		rows = append(rows, row)
 	}
 	valueRange.Values = rows
-	_, err = sheetsService.Spreadsheets.Values.Append(spreadsheetId, sheetRange, &valueRange).ValueInputOption("USER_ENTERED").Do()
+	_, err = sheetsService.Spreadsheets.Values.Append(spreadsheetId, sheetRange, &valueRange).ValueInputOption("RAW").Do()
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func doRequest(method string, url string, headers map[string]string, body interface{}) (string, error) {
+	client := &http.Client{}
+	var reqBody io.Reader
+	if body != nil {
+		bodyJson, _ := json.Marshal(body)
+		reqBody = bytes.NewBuffer(bodyJson)
+	}
+	req, err := http.NewRequest(method, url, reqBody)
+	if err != nil {
+		return "", err
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	bodyString := string(bodyBytes)
+	return bodyString, nil
 }
