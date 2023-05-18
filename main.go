@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/providers/linkedin"
@@ -56,16 +57,42 @@ func main() {
 	linkedinProvider := linkedin.New(client_id, client_secret, redirect_uri)
 	goth.UseProviders(linkedinProvider)
 
-	// Authenticate the user and obtain an access token
+	// Create a ticker that ticks every 30 minutes
+	ticker := time.NewTicker(30 * time.Minute)
+
+	for range ticker.C {
+		accessToken, err := authenticateUser(linkedinProvider)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		profiles, err := searchProfiles(accessToken, hashtag)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		filteredProfiles := filterProfiles(profiles, job_title, experience_years)
+
+		err = addProfilesToGoogleSheets(filteredProfiles, spreadsheet_id, sheet_name)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		fmt.Println("Profiles added to Google Sheets.")
+	}
+}
+
+func authenticateUser(linkedinProvider *linkedin.Provider) (string, error) {
 	session, err := linkedinProvider.BeginAuth("state")
 	if err != nil {
-		fmt.Println(err)
-		return
+		return "", err
 	}
 	authUrl, err := session.GetAuthURL()
 	if err != nil {
-		fmt.Println(err)
-		return
+		return "", err
 	}
 	fmt.Println("Please visit this URL to authenticate: ", authUrl)
 	fmt.Print("Enter the authentication code: ")
@@ -73,12 +100,12 @@ func main() {
 	fmt.Scanln(&authCode)
 	_, err = session.Authorize(goth.Params{"code": authCode})
 	if err != nil {
-		fmt.Println(err)
-		return
+		return "", err
 	}
-	accessToken := session.AccessToken
+	return session.AccessToken, nil
+}
 
-	// Search for profiles based on the hashtag
+func searchProfiles(accessToken string, hashtag string) ([]Profile, error) {
 	searchParams := url.Values{}
 	searchParams.Set("q", "hashtag:"+hashtag)
 	searchParams.Set("count", "10")
@@ -88,31 +115,31 @@ func main() {
 	searchHeaders := map[string]string{"Authorization": "Bearer " + accessToken}
 	searchResponse, err := doRequest("GET", searchUrl, searchHeaders, nil)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return nil, err
 	}
 	var profiles struct {
 		Elements []Profile `json:"elements"`
 	}
 	err = json.Unmarshal([]byte(searchResponse), &profiles)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return nil, err
 	}
+	return profiles.Elements, nil
+}
 
-	// Filter the profiles based on the criteria
+func filterProfiles(profiles []Profile, jobTitle string, experienceYears int) []Profile {
 	var filteredProfiles []Profile
-	for _, profile := range profiles.Elements {
+	for _, profile := range profiles {
 		hasJobTitle := false
 		hasExperience := false
 		for _, position := range profile.Positions {
-			if strings.Contains(strings.ToLower(position.Title), strings.ToLower(job_title)) {
+			if strings.Contains(strings.ToLower(position.Title), strings.ToLower(jobTitle)) {
 				hasJobTitle = true
 			}
 			startDate := position.StartDate.Year*12 + position.StartDate.Month
 			endDate := position.EndDate.Year*12 + position.EndDate.Month
 			duration := (endDate - startDate) / 12
-			if duration >= experience_years {
+			if duration >= experienceYears {
 				hasExperience = true
 			}
 		}
@@ -120,31 +147,30 @@ func main() {
 			filteredProfiles = append(filteredProfiles, profile)
 		}
 	}
+	return filteredProfiles
+}
 
-	// Add the filtered profiles to a new sheet in Google Sheets
+func addProfilesToGoogleSheets(profiles []Profile, spreadsheetId string, sheetName string) error {
 	ctx := context.Background()
 	creds, err := google.FindDefaultCredentials(ctx, sheets.SpreadsheetsScope)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 	sheetsService, err := sheets.NewService(ctx, creds)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
-	sheetRange := sheet_name + "!A1:E"
+	sheetRange := sheetName + "!A1:E"
 	var valueRange sheets.ValueRange
 	var rows [][]interface{}
-	for _, profile := range filteredProfiles {
+	for _, profile := range profiles {
 		row := []interface{}{profile.ID, profile.FirstName, profile.LastName, profile.Headline, profile.PublicProfileUrl}
 		rows = append(rows, row)
 	}
 	valueRange.Values = rows
-	_, err = sheetsService.Spreadsheets.Values.Append(spreadsheet_id, sheetRange, &valueRange).ValueInputOption("USER_ENTERED").Do()
+	_, err = sheetsService.Spreadsheets.Values.Append(spreadsheetId, sheetRange, &valueRange).ValueInputOption("USER_ENTERED").Do()
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
-	fmt.Println("Profiles added to Google Sheets.")
+	return nil
 }
