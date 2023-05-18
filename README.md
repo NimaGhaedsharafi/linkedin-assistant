@@ -1,5 +1,4 @@
-
-#LinkedIn Profile Search and Filtering Tool
+# LinkedIn Profile Search and Filtering Tool
 
 This is a command-line tool that searches for LinkedIn profiles based on a hashtag and filters the results based on job title and experience. The filtered profiles are then added to a new sheet in Google Sheets.
 Prerequisites
